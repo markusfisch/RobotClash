@@ -1,0 +1,442 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width"/>
+<title>ld37</title>
+<style>
+
+html, body {
+	margin: 0; padding: 0;
+	overflow: hidden;
+}
+
+canvas {
+	position: fixed;
+	width: 100%;
+	height: 100%;
+}
+
+</style>
+</head>
+<body>
+<canvas id="Canvas">Sorry, this browser cannot render this content.</canvas>
+<script id="VertexShader" type="x-shader/x-vertex">
+
+attribute vec2 vertexPosition;
+attribute vec2 texturePosition;
+
+uniform mat3 perspective;
+uniform mat3 transformation;
+
+varying vec2 textureUV;
+
+void main() {
+	gl_Position = vec4(
+		perspective *
+		transformation *
+		vec3(vertexPosition, 1.), 1.);
+
+	textureUV = texturePosition;
+}
+
+</script>
+<script id="FragmentShader" type="x-shader/x-fragment">
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+precision highp float;
+#else
+precision mediump float;
+#endif
+
+varying vec2 textureUV;
+
+uniform sampler2D texture;
+
+void main() {
+	gl_FragColor = texture2D(texture, textureUV.st).rgba;
+}
+
+</script>
+<script>
+
+'use strict'
+
+var M = Math,
+	D = document,
+	W = window,
+	FA = Float32Array,
+	atlas,
+	sprites = {},
+	gl,
+	vertexPositionBuffer,
+	vertexPositionLoc,
+	texturePositionBuffer,
+	texturePositionLoc,
+	perspective,
+	perspectiveLoc,
+	transformation,
+	transformationLoc,
+	texture,
+	textureLoc,
+	program,
+	width,
+	height,
+	aspect,
+	scaleFactor,
+	now,
+	factor,
+	last,
+	pointersLength,
+	pointersX = [],
+	pointersY = [],
+	keysDown = []
+
+function drawSprite(sprite, x, y) {
+	gl.bindBuffer(gl.ARRAY_BUFFER, texturePositionBuffer)
+	gl.vertexAttribPointer(
+		texturePositionLoc,
+		2,
+		gl.FLOAT,
+		gl.FALSE,
+		0,
+		sprite.index << 5)
+
+	transformation[0] =
+		transformation[8] = sprite.w
+	transformation[4] = sprite.h
+
+	transformation[6] = x
+	transformation[7] = y
+
+	gl.uniformMatrix3fv(
+		transformationLoc,
+		gl.FALSE,
+		transformation)
+
+	gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+}
+
+function initFrame() {
+	gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer)
+	gl.vertexAttribPointer(
+		vertexPositionLoc,
+		2,
+		gl.FLOAT,
+		gl.FALSE,
+		0,
+		0)
+
+	gl.uniformMatrix3fv(
+		perspectiveLoc,
+		gl.FALSE,
+		perspective)
+
+	gl.activeTexture(gl.TEXTURE0)
+	gl.bindTexture(gl.TEXTURE_2D, texture)
+	gl.uniform1i(textureLoc, 0)
+
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	gl.useProgram(program)
+}
+
+function draw() {
+	initFrame()
+}
+
+function input() {
+}
+
+function run() {
+	requestAnimationFrame(run)
+
+	now = Date.now()
+	factor = (now - last) / 16
+	last = now
+
+	input()
+	draw()
+}
+
+function setPointer(event, down) {
+	if (!down) {
+		pointersLength = event.touches ? event.touches.length : 0
+	} else if (event.touches) {
+		var touches = event.touches
+		pointersLength = touches.length
+
+		for (var i = pointersLength; i--;) {
+			var t = touches[i]
+
+			pointersX[i] = t.pageX
+			pointersY[i] = t.pageY
+		}
+	} else {
+		pointersLength = 1
+		pointersX[0] = event.pageX
+		pointersY[0] = event.pageY
+	}
+
+	event.preventDefault()
+}
+
+function pointerUp(event) {
+	setPointer(event, false)
+}
+
+function pointerMove(event) {
+	setPointer(event, pointersLength)
+}
+
+function pointerDown(event) {
+	setPointer(event, true)
+}
+
+function setKey(event, down) {
+	keysDown[event.keyCode] = down
+	event.preventDefault()
+}
+
+function keyUp(event) {
+	setKey(event, false)
+}
+
+function keyDown(event) {
+	setKey(event, true)
+}
+
+function scale(sprite) {
+	var size = sprite.size * scaleFactor
+
+	sprite.w = size
+	sprite.h = size * sprite.aspect
+}
+
+function compileShader(src, type) {
+	var shader = gl.createShader(type)
+	gl.shaderSource(shader, src)
+	gl.compileShader(shader)
+
+	return gl.getShaderParameter(shader, gl.COMPILE_STATUS) ?
+		shader :
+		null
+}
+
+function linkProgram(vs, fs) {
+	var p
+	if ((p = gl.createProgram())) {
+		gl.attachShader(p, vs)
+		gl.attachShader(p, fs)
+
+		gl.linkProgram(p)
+
+		if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+			gl.deleteProgram(p)
+			p = null
+		}
+	}
+
+	return p
+}
+
+function buildProgram(vertexSource, fragmentSource) {
+	var p, vs, fs
+	if ((vs = compileShader(vertexSource, gl.VERTEX_SHADER))) {
+		if ((fs = compileShader(fragmentSource, gl.FRAGMENT_SHADER))) {
+			p = linkProgram(vs, fs)
+			gl.deleteShader(fs)
+		}
+		gl.deleteShader(vs)
+	}
+
+	return p
+}
+
+function resize() {
+	width = gl.canvas.clientWidth
+	height = gl.canvas.clientHeight
+
+	gl.canvas.width = width
+	gl.canvas.height = height
+	gl.viewport(0, 0, width, height)
+
+	aspect = height / width
+	scaleFactor = M.min(1, aspect) * .1 / 64
+
+	perspective = new FA([
+		1, 0, 0,
+		0, width / height, 0,
+		0, 0, 1])
+
+	transformation = new FA([
+		1, 0, 0,
+		0, 1, 0,
+		0, 0, 1])
+}
+
+function calculateSpriteRects() {
+	var resources = {
+			foo: {x: 0, y: 0, w: 64, h: 64},
+		},
+		positions = [],
+		xf = 1 / atlas.width,
+		yf = 1 / atlas.height,
+		index = 0
+
+	for (var name in resources) {
+		var rc = resources[name],
+			x = rc.x,
+			y = rc.y,
+			w = rc.w,
+			h = rc.h,
+			l = xf * x,
+			t = yf * y,
+			r = xf * (x + w),
+			b = yf * (y + h)
+
+		sprites[name] = {
+			index: index++,
+			aspect: h / w,
+			size: w}
+
+		/* TRIANGLE_STRIP order:
+		 *   A--C   A: x, y
+		 *   | /|   B: x, y
+		 *   |/ |   C: x, y
+		 *   B--D   D: x, y */
+		positions.push(
+			l, t,
+			l, b,
+			r, t,
+			r, b)
+	}
+
+	return positions
+}
+
+function getEnabledAttribLocation(program, name) {
+	var loc = gl.getAttribLocation(program, name)
+	gl.enableVertexAttribArray(loc)
+	return loc
+}
+
+function initBuffers(program) {
+	vertexPositionBuffer = gl.createBuffer()
+	gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer)
+	gl.bufferData(gl.ARRAY_BUFFER,
+		new FA([
+			-1, 1,
+			-1, -1,
+			1, 1,
+			1, -1]),
+		gl.STATIC_DRAW)
+
+	texturePositionBuffer = gl.createBuffer()
+	gl.bindBuffer(gl.ARRAY_BUFFER, texturePositionBuffer)
+	gl.bufferData(
+		gl.ARRAY_BUFFER,
+		new FA(calculateSpriteRects()),
+		gl.STATIC_DRAW)
+
+	vertexPositionLoc = getEnabledAttribLocation(program, 'vertexPosition')
+	texturePositionLoc = getEnabledAttribLocation(program, 'texturePosition')
+	perspectiveLoc = gl.getUniformLocation(program, 'perspective')
+	transformationLoc = gl.getUniformLocation(program, 'transformation')
+	textureLoc = gl.getUniformLocation(program, 'texture')
+}
+
+function createTextureFrom(image) {
+	var id = gl.createTexture()
+	if (id < 1) {
+		return
+	}
+
+	gl.bindTexture(gl.TEXTURE_2D, id)
+	gl.texImage2D(
+		gl.TEXTURE_2D,
+		0,
+		gl.RGBA,
+		gl.RGBA,
+		gl.UNSIGNED_BYTE,
+		image)
+
+	gl.texParameteri(
+		gl.TEXTURE_2D,
+		gl.TEXTURE_MIN_FILTER,
+		gl.LINEAR_MIPMAP_LINEAR)
+	gl.texParameteri(
+		gl.TEXTURE_2D,
+		gl.TEXTURE_MAG_FILTER,
+		gl.LINEAR)
+
+	gl.generateMipmap(gl.TEXTURE_2D)
+	gl.bindTexture(gl.TEXTURE_2D, null)
+
+	return id
+}
+
+function getContext() {
+	for (var canvas = D.getElementById('Canvas'),
+			ctx,
+			types = ['webgl', 'experimental-webgl'],
+			l = types.length,
+			i = 0; i < l; ++i) {
+		if ((ctx = canvas.getContext(types[i], {alpha: false}))) {
+			return ctx
+		}
+	}
+}
+
+function init() {
+	if (!(gl = getContext()) || !(program = buildProgram(
+			D.getElementById('VertexShader').textContent,
+			D.getElementById('FragmentShader').textContent))) {
+		alert('WebGL not available')
+		return
+	}
+
+	if (!(texture = createTextureFrom(atlas))) {
+		alert('Cannot initialize atlas texture')
+		return
+	}
+
+	gl.enable(gl.BLEND)
+	gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+	gl.clearColor(0, 0, 0, 1)
+
+	initBuffers(program)
+
+	W.onresize = resize
+	resize()
+
+	D.onkeydown = keyDown
+	D.onkeyup = keyUp
+
+	D.onmousedown = pointerDown
+	D.onmousemove = pointerMove
+	D.onmouseup = pointerUp
+	D.onmouseout = pointerUp
+
+	if ('ontouchstart' in D) {
+		D.ontouchstart = pointerDown
+		D.ontouchmove = pointerMove
+		D.ontouchend = pointerUp
+		D.ontouchleave = pointerUp
+		D.ontouchcancel = pointerUp
+	}
+
+	last = Date.now() - 16
+	run()
+}
+
+function load() {
+	atlas = new Image()
+	atlas.src = 'atlas.png'
+	atlas.onload = init
+}
+
+W.onload = load
+
+</script>
+</body>
+</html>
