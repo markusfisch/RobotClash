@@ -1,67 +1,65 @@
 'use strict'
 
-const MAX_PLAYERS = 8,
-	GAMES = 'games',
-	NAME = 'name',
-	PLAYERS = 'players',
-	STATE = 'state'
-
-var fs = require('fs'),
+var MAX_PLAYERS = 8,
+	fs = require('fs'),
 	path = require('path'),
-	readline = require('readline'),
 	WebSocketServer = require('ws').Server,
 	wss = new WebSocketServer({port: 63378}),
 	emptyArray = [],
-	gamesDir = path.join(__dirname, GAMES),
+	gamesDir = path.join(__dirname, 'games'),
 	playerSerial = 0
+
+if (!fs.existsSync(gamesDir)) {
+	fs.mkdirSync(gamesDir)
+}
 
 wss.on('connection', function(ws) {
 	var playerId = ++playerSerial,
-		currentGameDir = null,
-		stateFile = null
+		currentGameFile = null,
+		watcher = null
+
+	function parseJson(s) {
+		try {
+			return JSON.parse(s)
+		} catch (e) {
+			return {}
+		}
+	}
 
 	function sendJSON(obj) {
-		ws.send(JSON.stringify(obj))
+		try {
+			ws.send(JSON.stringify(obj))
+		} catch (e) {
+			leaveGame()
+		}
 	}
 
 	function sendOk(obj) {
-		sendJSON(Object.assign({success: true}, obj))
+		sendJSON(obj)
 	}
 
 	function sendError(message) {
-		sendJSON({success: false, error: message})
+		sendJSON({error: message})
 	}
 
-	function getPlayers(gameDir) {
-		var playersDir = path.join(gameDir || currentGameDir, PLAYERS)
-		return fs.existsSync(playersDir) ?
-			fs.readdirSync(playersDir) :
-			emptyArray
+	function loadGame(gameFile) {
+		gameFile = gameFile || currentGameFile
+		return fs.existsSync(gameFile) ?
+			parseJson(fs.readFileSync(gameFile)) :
+			null
 	}
 
-	function getNumberOfPlayers(gameDir) {
-		return getPlayers(gameDir).length
-	}
-
-	function removeDirectory(dir) {
-		if (!fs.existsSync(dir)) {
-			return
+	function saveGame(game) {
+		if (currentGameFile) {
+			fs.writeFileSync(currentGameFile, JSON.stringify(game))
 		}
-		fs.readdirSync(dir).forEach(function(file, index) {
-			file = path.join(dir, file)
-			if (fs.lstatSync(file).isDirectory()) {
-				removeDirectory(file)
-			} else {
-				fs.unlinkSync(file)
-			}
-		})
-		fs.rmdirSync(dir)
 	}
 
 	function listGames() {
 		fs.readdir(gamesDir, function(err, list) {
-			if (err) {
-				sendError('no games available')
+			if (err || !list || list.length < 1) {
+				sendOk({games: 'no games available'})
+				return
 			}
 			var files = list.length
 			if (files > 999) {
@@ -72,42 +70,47 @@ wss.on('connection', function(ws) {
 				games = []
 			for (var i = files; i--;) {
 				var gameId = list[i],
-					gameDir = path.join(gamesDir, gameId),
-					createdFile = path.join(gameDir, CREATED)
-				if (!fs.lstatSync(gameDir).isDirectory() ||
-						!fs.existsSync(createdFile)) {
-					fs.unlinkSync(gameDir)
-				}
-				var created = fd.readFileSync(createdFile)
-				if (!created || now - created > 86400000) {
-					removeDirectory(gameDir)
+					gameFile = path.join(gamesDir, gameId.toString()),
+					game = loadGame(gameFile)
+				if (!game || now - game.created > 86400000) {
+					fs.unlinkSync(gameFile)
 					continue
 				}
-				var players = getNumberOfPlayers(gameDir)
-				if (players < MAX_PLAYERS) {
+				var numberOfPlayers = game.players.length
+				if (numberOfPlayers < MAX_PLAYERS) {
 					games.push({
-						gameId: gameId,
-						name: fd.readFileSync(path.join(gameDir, NAME)),
-						players: players})
+						id: gameId,
+						name: game.name,
+						players: numberOfPlayers})
 				}
 			}
-			sendOk({list: games}))
+			sendOk({games: games})
 		})
 	}
 
-	function updateClient(event, filename) {
-		sendOk({update: fs.readFileSync(filename)})
+	function closeWatcher() {
+		if (watcher) {
+			watcher.close()
+			watcher = null
+		}
 	}
 
-	function addPlayerToGame(gameDir, playerId) {
-		fs.mkdirSync(path.join(gameDir, PLAYERS, playerId))
-		stateFile = path.join(gameDir, STATE)
-		fs.watch(stateFile, updateClient)
-		currentGameDir = gameDir
+	function watchGame(gameFile) {
+		closeWatcher()
+		watcher = fs.watch(gameFile, function() {
+			if (!fs.existsSync(gameFile)) {
+				watcher.close()
+			} else {
+				sendOk({update: loadGame()})
+			}
+		})
 	}
 
-	function createInitialState() {
+	function createInitialGame(name) {
 		return {
+			created: Date.now(),
+			name: name,
+			players: [],
 			width: 5,
 			height: 5,
 			map: [
@@ -119,14 +122,26 @@ wss.on('connection', function(ws) {
 		}
 	}
 
-	function getState() {
-		return fs.existsSync(stateFile) ?
-			JSON.parse(fs.readFileSync(stateFile)) :
-			null
+	function addPlayerToGame(game) {
+		game.players.push({
+			id: playerId,
+			life: 1})
 	}
 
-	function setState(state) {
-		fs.writeFileSync(stateFile, JSON.stringify(state))
+	function findGameByName(name) {
+		var gameIds = fs.readdirSync(gamesDir)
+		if (!gameIds || gameIds.length < 1) {
+			return null
+		}
+		for (var i = gameIds.length; i--;) {
+			var gameId = gameIds[i],
+				gameFile = path.join(gamesDir, gameId.toString()),
+				game = loadGame(gameFile)
+			if (game && game.name === name) {
+				return game
+			}
+		}
+		return null
 	}
 
 	function createGame(json) {
@@ -134,18 +149,33 @@ wss.on('connection', function(ws) {
 			sendError('missing name')
 			return
 		}
-		var gameDir = path.join(gamesDir, playerId)
-		if (fs.existsSync(gameDir)) {
+		var gameFile = path.join(gamesDir, playerId.toString())
+		if (fs.existsSync(gameFile)) {
 			sendError('you already created a game')
 			return
 		}
-		fs.mkdirSync(gameDir)
-		fs.mkdirSync(path.join(gameDir, PLAYERS))
-		fs.writeFileSync(path.join(gameDir, NAME), json.name)
-		stateFile = path.join(gameDir, STATE)
-		setState(createInitialState())
-		addPlayerToGame(gameDir, playerId)
-		sendOk()
+		var name = json.name.trim().toLowerCase().substring(0, 16)
+		if (findGameByName(json.name)) {
+			sendError('there is already a game of that name')
+			return
+		}
+		currentGameFile = gameFile
+		var game = createInitialGame(json.name)
+		addPlayerToGame(game)
+		saveGame(game)
+		watchGame(gameFile)
+		sendOk({created: true})
+	}
+
+	function getPlayerFromGame(game) {
+		var players = game.players
+		for (var i = players.length; i--;) {
+			var player = players[i]
+			if (player.id === playerId) {
+				return player
+			}
+		}
+		return null
 	}
 
 	function joinGame(json) {
@@ -153,59 +183,67 @@ wss.on('connection', function(ws) {
 			sendError('missing gameId')
 			return
 		}
-		var gameDir = path.join(gamesDir, json.gameId)
-		if (!fs.existsSync(gameDir)) {
+		var gameFile = path.join(gamesDir, json.gameId.toString()),
+			game = loadGame(gameFile)
+		if (!game) {
 			sendError('game does not exist')
 			return
 		}
-		if (getNumberOfPlayers(gameDir) >= MAX_PLAYERS) {
+		if (game.players.length >= MAX_PLAYERS) {
 			sendError('already full')
 			return
 		}
-		addPlayerToGame(gameDir, playerId)
-		sendOk()
+		if (getPlayerFromGame(game)) {
+			sendError('you are already in this game')
+			return
+		}
+		currentGameFile = gameFile
+		addPlayerToGame(game)
+		saveGame(game)
+		watchGame(gameFile)
+		sendOk({joined: true})
+	}
+
+	function removePlayerFromGame(game, id) {
+		var players = game.players
+		for (var i = players.length; i--;) {
+			var player = players[i]
+			if (player.id === id) {
+				players.splice(i, 1)
+				return true
+			}
+		}
+		return false
 	}
 
 	function leaveGame() {
-		if (currentGameDir) {
-			removeDirectory(path.join(currentGameDir, PLAYERS, playerId))
-			if (getNumberOfPlayers(currentGameDir) < 1) {
-				removeDirectory(currentGameDir)
+		if (currentGameFile) {
+			var game = loadGame()
+			if (!game) {
+				sendError('there is no game to leave')
+				return
+			}
+			removePlayerFromGame(game, playerId)
+			if (game.players.length < 1) {
+				fs.unlinkSync(currentGameFile)
 			} else {
-				// update state with new number of players
+				saveGame(game)
 			}
 		}
-		currentGameDir = null
+		currentGameFile = null
+		closeWatcher()
 	}
 
-	function removeGame() {
-		leaveGame()
-		removeDirectory(path.join(gamesDir, playerId))
+	function getOffset(game, x, y) {
+		return Math.round(y * game.height + game.x) % game.map.length
 	}
 
-	function getOffset(state, x, y) {
-		return Math.round(y * state.height + state.x) % state.length
+	function getCell(game, x, y) {
+		return game.map[getOffset(game, x, y)]
 	}
 
-	function getCell(state, x, y) {
-		return state.map[getOffset(state, x, y)]
-	}
-
-	function setCell(state, x, y, content) {
-		state.map[getOffset(state, x, y)] = content
-	}
-
-	function isInGame() {
-		if (!currentGameDir || !fs.existsSync(currentGameDir)) {
-			sendError('you are not part of a game yet')
-			return false
-		}
-		var playerDir = path.join(currentGameDir, PLAYERS, playerId)
-		if (!fs.existsSync(playerDir)) {
-			sendError('you are not part of this game')
-			return false
-		}
-		return true
+	function setCell(game, x, y, content) {
+		game.map[getOffset(game, x, y)] = content
 	}
 
 	function getPlayerByPosition(players, x, y) {
@@ -218,21 +256,39 @@ wss.on('connection', function(ws) {
 		return 0
 	}
 
+	function findNextPlayer(game) {
+		var players = game.players
+			len = players.length
+		if (len < 1) {
+			return -1
+		}
+		var atTurn = game.turn,
+			i = 0
+		for (; i < len; ++i) {
+			var player = players[i]
+			if (player.id === atTurn) {
+				++i
+				break
+			}
+		}
+		return players[i % len].id
+	}
+
 	function startGame() {
-		if (!isInGame()) {
+		var game = loadGame()
+		if (!game || !getPlayerFromGame(game)) {
+			sendError('you are not part of a game yet')
 			return
 		}
-		var playerIds = getPlayers()
-		if (playerIds.length < 2) {
+		if (game.players.length < 1) {
 			sendError('not enough players to start')
 			return
 		}
-		var state = getState(),
-			width = state.width,
-			height = state.height,
-			players = []
-		for (var i = playerIds.length; i--;) {
-			var playerId = playerIds[i],
+		var width = game.width,
+			height = game.height,
+			players = game.players
+		for (var i = players.length; i--;) {
+			var player = players[i],
 				x,
 				y
 
@@ -241,71 +297,100 @@ wss.on('connection', function(ws) {
 				y = height * Math.random() | 0
 			} while (getPlayerByPosition(players, x, y) > 0)
 
-			players.push({
-				id: playerId,
-				x: x,
-				y: y})
+			player.x = x
+			player.y = y
 		}
-		state.turn = playerIds[0]
-		state.players = playerInfos
-		setState(state)
+		game.started = Date.now()
+		game.turn = players[0].id
+		saveGame(game)
 	}
 
-	function getPlayerFromState(state) {
-		var players = state.players
-		for (var i = players.length; i--;) {
-			var player = players[i]
-			if (player.id === playerId) {
-				return player
-			}
-		}
-		return null
-	}
-
-	function getCheckedState() {
-		if (!isInGame()) {
+	function loadGameAndPlayer() {
+		var game = loadGame(),
+			player
+		if (!game || !(player = getPlayerFromGame(game))) {
+			sendError('you are not a part of this game yet')
 			return null
-		}
-		var state = getState()
-		if (state.turn !== playerId) {
+		} else if (game.turn !== playerId) {
 			sendError('it is not your turn')
 			return null
 		}
-		var player = getPlayerFromState(state)
-		if (!player) {
-			sendError('player not in current game')
+		return {game: game, player: player}
+	}
+
+	function getCheckedGame(game) {
+		var player
+		if (!game || !(player = getPlayerFromGame(game))) {
+			sendError('you are not a part of this game yet')
+			return null
+		} else if (game.turn !== playerId) {
+			sendError('it is not your turn')
 			return null
 		}
-		return state
+		return player
 	}
 
-	function playerAttack() {
-		var state = getCheckedState()
-		if (!state) {
+	function playerAttack(json) {
+		if (!json || !json.target) {
+			sendError('missing attack target')
 			return
 		}
-		// attack another player
+		var game = loadGame(),
+			player = getCheckedGame(game)
+		if (!player) {
+			return
+		}
+		var target = json.target,
+			x = target.x,
+			y = target.y,
+			victim = getPlayerByPosition(players, x, y)
+		if (!victim) {
+			return
+		}
+		//if (Math.random() > victim.defense) {
+			victim.life -= .25
+		//}
+		if (victim.life <= 0) {
+			removePlayerFromGame(game, victim.id)
+		}
+		game.turn = findNextPlayer(game)
+		saveGame(game)
 	}
 
-	function playerMove() {
-		var state = getCheckedState()
-		if (!state) {
+	function playerMove(json) {
+		if (!json || !json.target) {
+			sendError('missing a direction')
 			return
 		}
-		// move player to new position
+		var game = loadGame(),
+			player = getCheckedGame(game)
+		if (!player) {
+			return
+		}
+		var width = game.width,
+			height = game.height,
+			target = json.target,
+			x = target.x,
+			y = target.y
+		if (x < 1 || x >= width - 1 ||
+				y < 1 || y >= height - 1 ||
+				getPlayerByPosition(players, x, y)) {
+			return
+		}
+		player.x = x
+		player.y = y
+		game.turn = findNextPlayer(game)
+		saveGame(game)
 	}
 
 	ws.on('message', function(message) {
-		var json = JSON.parse(message)
+		var json = parseJson(message)
 		switch (json.cmd) {
 		default:
 			sendError('missing command')
 			break
 		case 'list':
 			listGames()
-			break
-		case 'remove':
-			removeGame()
 			break
 		case 'create':
 			createGame(json)
@@ -317,13 +402,13 @@ wss.on('connection', function(ws) {
 			joinGame(json)
 			break
 		case 'start':
-			joinGame(json)
+			startGame(json)
 			break
 		case 'attack':
-			playerAttack()
+			playerAttack(json)
 			break
 		case 'move':
-			playerMove()
+			playerMove(json)
 			break
 		}
 	})

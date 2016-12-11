@@ -9,6 +9,13 @@
 html, body {
 	margin: 0; padding: 0;
 	overflow: hidden;
+	-ms-touch-action: none;
+	background: #111;
+	font: 16pt monospace; color: #fff;
+	font-weight: lighter;
+	letter-spacing: .1em;
+	line-height: 150%;
+	text-transform: uppercase;
 }
 
 canvas {
@@ -17,10 +24,71 @@ canvas {
 	height: 100%;
 }
 
+.Overlay {
+	position: fixed;
+	width: 100%;
+	height: 100%;
+	text-align: center;
+	z-index: 9;
+}
+
+#JoinGameOverlay {
+	display: none
+}
+
+#CreateGameForm {
+	margin: 0 1em;
+}
+
+.Headline {
+	margin: 1em;
+}
+
+.List {
+	list-style: none;
+	margin: 1em; padding: 0;
+	border-top: 1px solid #fff;
+}
+
+.List li {
+	margin: 0; padding: .2em 0;
+	cursor: pointer;
+	border-bottom: 1px solid #fff;
+}
+
+.Button, .Input {
+	margin: 0 0 1em; padding: .2em .6em;
+	background: #fff;
+	font: 16pt monospace; color: #111;
+	font-weight: lighter;
+	letter-spacing: .1em;
+	line-height: 150%;
+	text-transform: uppercase;
+	border: 0;
+}
+
 </style>
 </head>
 <body>
 <canvas id="Canvas">Sorry, this browser cannot render this content.</canvas>
+<div id="GameListOverlay" class="Overlay">
+	<h2 class="Headline">Create or join a game</h2>
+	<form id="CreateGameForm" onsubmit="return false">
+	<input type="text" id="GameName" class="Input"
+		minlength="1" maxlength="16"/>
+	<button id="CreateGame" class="Button"
+		onclick="createGame(); return false">Create</button>
+	</form>
+	<ul id="GameList" class="List">
+		<li>(loading games)</li>
+	</ul>
+</div>
+<div id="JoinGameOverlay" class="Overlay">
+	<h2 class="Headline">Waiting for other players</h2>
+	<button id="StartGame" class="Button"
+		onclick="startGame()">Start Now</button>
+	<p><span id="NumberOfPlayers">1</span> of 8 players</p>
+</div>
 <script id="VertexShader" type="x-shader/x-vertex">
 
 attribute vec2 vertexPosition;
@@ -66,7 +134,10 @@ var M = Math,
 	D = document,
 	W = window,
 	FA = Float32Array,
+	ws,
 	atlas,
+	overlayGameList,
+	overlayJoinGame,
 	sprites = {},
 	gl,
 	vertexPositionBuffer,
@@ -90,7 +161,8 @@ var M = Math,
 	pointersLength,
 	pointersX = [],
 	pointersY = [],
-	keysDown = []
+	keysDown = [],
+	game
 
 function drawSprite(sprite, x, y) {
 	gl.bindBuffer(gl.ARRAY_BUFFER, texturePositionBuffer)
@@ -177,7 +249,7 @@ function setPointer(event, down) {
 		pointersY[0] = event.pageY
 	}
 
-	event.preventDefault()
+	event.stopPropagation()
 }
 
 function pointerUp(event) {
@@ -194,7 +266,7 @@ function pointerDown(event) {
 
 function setKey(event, down) {
 	keysDown[event.keyCode] = down
-	event.preventDefault()
+	event.stopPropagation()
 }
 
 function keyUp(event) {
@@ -387,14 +459,7 @@ function getContext() {
 	}
 }
 
-function init() {
-	if (!(gl = getContext()) || !(program = buildProgram(
-			D.getElementById('VertexShader').textContent,
-			D.getElementById('FragmentShader').textContent))) {
-		alert('WebGL not available')
-		return
-	}
-
+function initGame() {
 	if (!(texture = createTextureFrom(atlas))) {
 		alert('Cannot initialize atlas texture')
 		return
@@ -429,10 +494,128 @@ function init() {
 	run()
 }
 
+function startWhenReady() {
+	if (!atlas.complete) {
+		setTimeout(startWhenReady, 500)
+		return
+	}
+	overlayJoinGame.style.display = 'none'
+	initGame()
+}
+
+function setNumberOfPlayers(n) {
+	var e = D.getElementById('NumberOfPlayers')
+	e.innerText = n
+}
+
+function updateGame(update) {
+	if (update.started) {
+		game = update
+		if (!last) {
+			startWhenReady()
+		}
+	} else {
+		setNumberOfPlayers(update.players.length)
+	}
+}
+
+function send(obj) {
+	ws.send(JSON.stringify(obj))
+}
+
+function startGame() {
+	send({cmd: 'start'})
+}
+
+function joinGame(gameId) {
+	send({cmd: 'join', gameId: gameId})
+}
+
+function createGame() {
+	var e = D.getElementById('GameName'),
+		name = e.value.trim()
+	if (name) {
+		send({cmd: 'create', name: name})
+	}
+}
+
+function updateGameList(games) {
+	var ul = D.getElementById('GameList')
+	ul.innerText = ''
+	if (typeof games === 'string') {
+		var li = D.createElement('li')
+		li.innerText = games
+		ul.appendChild(li)
+		return
+	}
+	games.forEach(function(g) {
+		var li = D.createElement('li')
+		li.innerText = g.name + ', ' + g.players + ' player(s)'
+		li.onclick = function() {
+			setNumberOfPlayers(g.players)
+			joinGame(g.id)
+		}
+		ul.appendChild(li)
+	})
+}
+
+function parseJson(s) {
+	try {
+		return JSON.parse(s)
+	} catch (e) {
+		return null
+	}
+}
+
+function waitForOthersToJoin() {
+	overlayGameList.style.display = 'none'
+	overlayJoinGame.style.display = 'block'
+}
+
+function message(event) {
+	var json = parseJson(event.data)
+	if (json.error) {
+		alert(json.error)
+	} else if (json.games) {
+		updateGameList(json.games)
+	} else if (json.created || json.joined) {
+		waitForOthersToJoin()
+	} else if (json.update) {
+		updateGame(json.update)
+	}
+}
+
+function disconnected() {
+	alert('Connection lost')
+}
+
+function connected() {
+	send({cmd:'list'})
+}
+
 function load() {
-	atlas = new Image()
-	atlas.src = 'atlas.png'
-	atlas.onload = init
+	if (!'WebSocket' in W) {
+		alert('WebSockets not available')
+		return
+	}
+
+	if (!(gl = getContext()) || !(program = buildProgram(
+			D.getElementById('VertexShader').textContent,
+			D.getElementById('FragmentShader').textContent))) {
+		alert('WebGL not available')
+		return
+	}
+
+	overlayGameList = D.getElementById('GameListOverlay')
+	overlayJoinGame = D.getElementById('JoinGameOverlay')
+
+	ws = new WebSocket('ws://menkent.uberspace.de:63378/')
+	ws.onopen = connected
+	ws.onmessage = message
+	ws.onclose = disconnected
+
+	/*atlas = new Image()
+	atlas.src = 'atlas.png'*/
 }
 
 W.onload = load
