@@ -1,6 +1,17 @@
 'use strict'
 
-var MAX_PLAYERS = 8,
+var PLAYER_COLORS = [
+		{normal: '#b5ff00', dark: '#91cc00'},
+		{normal: '#ffb400', dark: '#cc9000'},
+		{normal: '#ff1100', dark: '#cd0e00'},
+		{normal: '#ff00b8', dark: '#cc0093'},
+		{normal: '#9a00ff', dark: '#7b00cc'},
+		{normal: '#0046ff', dark: '#0038cc'},
+		{normal: '#00fffe', dark: '#00cccb'},
+		{normal: '#00ff5a', dark: '#00cc48'},
+	],
+	MAX_PLAYERS = PLAYER_COLORS.length,
+	MOVES_PER_ROUND = 2,
 	fs = require('fs'),
 	path = require('path'),
 	WebSocketServer = require('ws').Server,
@@ -9,9 +20,25 @@ var MAX_PLAYERS = 8,
 	gamesDir = path.join(__dirname, 'games'),
 	playerSerial = 0
 
-if (!fs.existsSync(gamesDir)) {
-	fs.mkdirSync(gamesDir)
+function removeDirectory(dir) {
+	if (!fs.existsSync(dir)) {
+		return
+	}
+	fs.readdirSync(dir).forEach(function(file, index) {
+		file = path.join(dir, file)
+		if (fs.lstatSync(file).isDirectory()) {
+			removeDirectory(file)
+		} else {
+			fs.unlinkSync(file)
+		}
+	})
+	fs.rmdirSync(dir)
 }
+
+if (fs.existsSync(gamesDir)) {
+	removeDirectory(gamesDir)
+}
+fs.mkdirSync(gamesDir)
 
 wss.on('connection', function(ws) {
 	var playerId = ++playerSerial,
@@ -55,36 +82,39 @@ wss.on('connection', function(ws) {
 		}
 	}
 
+	function getGamesList(list) {
+		var now = Date.now(),
+			games = []
+		for (var i = M.min(list.length, 999); i--;) {
+			var gameId = list[i],
+				gameFile = path.join(gamesDir, gameId.toString()),
+				game = loadGame(gameFile)
+			if (!game || now - game.created > 86400000) {
+				fs.unlinkSync(gameFile)
+				continue
+			}
+			var numberOfPlayers = game.players.length
+			if (numberOfPlayers < MAX_PLAYERS && !game.started) {
+				games.push({
+					id: gameId,
+					name: game.name,
+					players: numberOfPlayers,
+					maxPlayers: MAX_PLAYERS})
+			}
+		}
+		return games
+	}
+
 	function listGames() {
 		fs.readdir(gamesDir, function(err, list) {
-			if (err || !list || list.length < 1) {
+			var games
+			if (!err && list &&
+					(games = getGamesList(list)) &&
+					games.length > 0) {
+				sendOk({games: games})
+			} else {
 				sendOk({games: 'no games available'})
-				return
 			}
-			var files = list.length
-			if (files > 999) {
-				sendError('too many games, please wait some time and retry')
-				return
-			}
-			var now = Date.now(),
-				games = []
-			for (var i = files; i--;) {
-				var gameId = list[i],
-					gameFile = path.join(gamesDir, gameId.toString()),
-					game = loadGame(gameFile)
-				if (!game || now - game.created > 86400000) {
-					fs.unlinkSync(gameFile)
-					continue
-				}
-				var numberOfPlayers = game.players.length
-				if (numberOfPlayers < MAX_PLAYERS) {
-					games.push({
-						id: gameId,
-						name: game.name,
-						players: numberOfPlayers})
-				}
-			}
-			sendOk({games: games})
 		})
 	}
 
@@ -109,23 +139,35 @@ wss.on('connection', function(ws) {
 	function createInitialGame(name) {
 		return {
 			created: Date.now(),
+			started: 0,
 			name: name,
+			maxPlayers: MAX_PLAYERS,
 			players: [],
-			width: 5,
-			height: 5,
+			attacks: [],
+			moves: [],
+			width: 8,
+			height: 8,
 			map: [
-				0, 0, 0, 0, 0,
-				0, 0, 0, 0, 0,
-				0, 0, 0, 0, 0,
-				0, 0, 0, 0, 0,
-				0, 0, 0, 0, 0],
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 1, 0, 0, 0, 0, 1, 0,
+				0, 0, 0, 2, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 2, 0, 0, 0,
+				0, 1, 0, 0, 0, 0, 1, 0,
+				0, 0, 0, 0, 0, 0, 0, 0,
+			],
 		}
 	}
 
 	function addPlayerToGame(game) {
-		game.players.push({
+		var players = game.players,
+			color = PLAYER_COLORS[players.length]
+		players.push({
 			id: playerId,
-			life: 1})
+			life: 1,
+			moves: MOVES_PER_ROUND,
+			color: color})
 	}
 
 	function findGameByName(name) {
@@ -164,7 +206,7 @@ wss.on('connection', function(ws) {
 		addPlayerToGame(game)
 		saveGame(game)
 		watchGame(gameFile)
-		sendOk({created: true})
+		sendOk({created: playerId})
 	}
 
 	function getPlayerFromGame(game) {
@@ -189,6 +231,10 @@ wss.on('connection', function(ws) {
 			sendError('game does not exist')
 			return
 		}
+		if (game.started) {
+			sendError('game already started')
+			return
+		}
 		if (game.players.length >= MAX_PLAYERS) {
 			sendError('already full')
 			return
@@ -201,7 +247,7 @@ wss.on('connection', function(ws) {
 		addPlayerToGame(game)
 		saveGame(game)
 		watchGame(gameFile)
-		sendOk({joined: true})
+		sendOk({joined: playerId})
 	}
 
 	function removePlayerFromGame(game, id) {
@@ -235,15 +281,11 @@ wss.on('connection', function(ws) {
 	}
 
 	function getOffset(game, x, y) {
-		return Math.round(y * game.height + game.x) % game.map.length
+		return Math.round(y * game.height + x) % game.map.length
 	}
 
 	function getCell(game, x, y) {
 		return game.map[getOffset(game, x, y)]
-	}
-
-	function setCell(game, x, y, content) {
-		game.map[getOffset(game, x, y)] = content
 	}
 
 	function getPlayerByPosition(players, x, y) {
@@ -271,7 +313,15 @@ wss.on('connection', function(ws) {
 				break
 			}
 		}
-		return players[i % len].id
+		return players[i % len]
+	}
+
+	function nextMoveOrPlayer(game, player) {
+		if (--player.moves < 1) {
+			var next = findNextPlayer(game)
+			next.moves = MOVES_PER_ROUND
+			game.turn = next.id
+		}
 	}
 
 	function startGame() {
@@ -338,6 +388,7 @@ wss.on('connection', function(ws) {
 		var game = loadGame(),
 			player = getCheckedGame(game)
 		if (!player) {
+			sendError('player not in game')
 			return
 		}
 		var target = json.target,
@@ -345,15 +396,28 @@ wss.on('connection', function(ws) {
 			y = target.y,
 			victim = getPlayerByPosition(players, x, y)
 		if (!victim) {
+			sendError('no target at given position')
 			return
 		}
-		//if (Math.random() > victim.defense) {
-			victim.life -= .25
-		//}
+		var ground = getCell(game, victim.x, victim.y)
+		if (Math.random() > .5 / (ground + 1)) {
+			var dx = victim.x - player.x,
+				dy = victim.y - player.y,
+				d = Math.sqrt(dx*dx + dy*dy),
+				damage = 1 / d
+			victim.life -= damage
+			game.attacks.push({
+				from: player.id,
+				to: victim.id,
+				damage: damage})
+		}
 		if (victim.life <= 0) {
 			removePlayerFromGame(game, victim.id)
+			if (game.players.length < 2) {
+				game.winner = player.id
+			}
 		}
-		game.turn = findNextPlayer(game)
+		nextMoveOrPlayer(game, player)
 		saveGame(game)
 	}
 
@@ -365,6 +429,7 @@ wss.on('connection', function(ws) {
 		var game = loadGame(),
 			player = getCheckedGame(game)
 		if (!player) {
+			sendError('player not in game')
 			return
 		}
 		var width = game.width,
@@ -375,11 +440,18 @@ wss.on('connection', function(ws) {
 		if (x < 1 || x >= width - 1 ||
 				y < 1 || y >= height - 1 ||
 				getPlayerByPosition(players, x, y)) {
+			sendError('illegal move')
 			return
 		}
+		game.moves.push({
+			playerId: player.id,
+			fromX: player.x,
+			fromY: player.y,
+			toX: x,
+			toY: y})
 		player.x = x
 		player.y = y
-		game.turn = findNextPlayer(game)
+		nextMoveOrPlayer(game, player)
 		saveGame(game)
 	}
 

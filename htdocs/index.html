@@ -8,10 +8,8 @@
 
 html, body {
 	margin: 0; padding: 0;
-	overflow: hidden;
-	-ms-touch-action: none;
-	background: #111;
-	font: 16pt monospace; color: #fff;
+	background: #b3b3b3;
+	font: 16pt monospace; color: #1a1a1a;
 	font-weight: lighter;
 	letter-spacing: .1em;
 	line-height: 150%;
@@ -19,6 +17,7 @@ html, body {
 }
 
 canvas {
+	display: none;
 	position: fixed;
 	width: 100%;
 	height: 100%;
@@ -47,19 +46,19 @@ canvas {
 .List {
 	list-style: none;
 	margin: 1em; padding: 0;
-	border-top: 1px solid #fff;
+	border-top: 1px solid #b3b3b3;
 }
 
 .List li {
 	margin: 0; padding: .2em 0;
 	cursor: pointer;
-	border-bottom: 1px solid #fff;
+	border-bottom: 1px solid #b3b3b3;
 }
 
 .Button, .Input {
 	margin: 0 0 1em; padding: .2em .6em;
-	background: #fff;
-	font: 16pt monospace; color: #111;
+	background: #404040;
+	font: 16pt monospace; color: #b3b3b3;
 	font-weight: lighter;
 	letter-spacing: .1em;
 	line-height: 150%;
@@ -87,7 +86,7 @@ canvas {
 	<h2 class="Headline">Waiting for other players</h2>
 	<button id="StartGame" class="Button"
 		onclick="startGame()">Start Now</button>
-	<p><span id="NumberOfPlayers">1</span> of 8 players</p>
+	<p><span id="NumberOfPlayers">1 of 8</span> players</p>
 </div>
 <script id="VertexShader" type="x-shader/x-vertex">
 
@@ -134,11 +133,23 @@ var M = Math,
 	D = document,
 	W = window,
 	FA = Float32Array,
+	TILE_GROUND0 = 0,
+	TILE_GROUND1 = 1,
+	TILE_GROUND2 = 2,
+	TILE_CORNER = 3,
+	TILE_WALL = 4,
+	LASER = 5,
+	ROBOT0 = 6,
+	ROBOT1 = 7,
+	THRUST0 = 8,
+	THRUST1 = 9,
+	TURN = 10,
 	ws,
 	atlas,
 	overlayGameList,
 	overlayJoinGame,
-	sprites = {},
+	canvas,
+	sprites = [],
 	gl,
 	vertexPositionBuffer,
 	vertexPositionLoc,
@@ -153,8 +164,11 @@ var M = Math,
 	program,
 	width,
 	height,
-	aspect,
 	scaleFactor,
+	tileSize,
+	halfTileSize,
+	mapX,
+	mapY,
 	now,
 	factor,
 	last,
@@ -189,7 +203,33 @@ function drawSprite(sprite, x, y) {
 	gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 }
 
+function drawPlayers() {
+	var players = game.players
+	for (var i = players.length; i--;) {
+		var player = players[i],
+			x = mapX + player.x * tileSize,
+			y = mapY - player.y * tileSize +
+				(M.sin(now * .001) * tileSize * .05)
+		drawSprite(sprites[ROBOT0], x, y)
+	}
+}
+
+function drawMap() {
+	var map = game.map,
+		width = game.width,
+		height = game.height,
+		offset = 0
+	for (var r = height, y = mapY; r--; y -= tileSize) {
+		for (var c = width, x = mapX; c--; ++offset, x += tileSize) {
+			drawSprite(sprites[map[offset]], x, y)
+		}
+	}
+}
+
 function initFrame() {
+	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+	gl.useProgram(program)
+
 	gl.bindBuffer(gl.ARRAY_BUFFER, vertexPositionBuffer)
 	gl.vertexAttribPointer(
 		vertexPositionLoc,
@@ -207,13 +247,12 @@ function initFrame() {
 	gl.activeTexture(gl.TEXTURE0)
 	gl.bindTexture(gl.TEXTURE_2D, texture)
 	gl.uniform1i(textureLoc, 0)
-
-	gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
-	gl.useProgram(program)
 }
 
 function draw() {
 	initFrame()
+	drawMap()
+	drawPlayers()
 }
 
 function input() {
@@ -332,8 +371,18 @@ function resize() {
 	gl.canvas.height = height
 	gl.viewport(0, 0, width, height)
 
-	aspect = height / width
-	scaleFactor = M.min(1, aspect) * .1 / 64
+	var halfWidth = width >> 1,
+		halfHeight = height >> 1,
+		cols = game.width,
+		rows = game.height,
+		ref = sprites[TILE_GROUND0].size
+
+	scaleFactor = .45 / halfWidth *
+		M.min(width / cols / ref, height / rows / ref)
+	tileSize = scaleFactor * 2 * ref
+	halfTileSize = tileSize * .5
+	mapX = (cols - 1) / 2 * -tileSize
+	mapY = -(rows - 1) / 2 * -tileSize
 
 	perspective = new FA([
 		1, 0, 0,
@@ -344,19 +393,34 @@ function resize() {
 		1, 0, 0,
 		0, 1, 0,
 		0, 0, 1])
+
+	for (var id in sprites) {
+		scale(sprites[id])
+	}
 }
 
 function calculateSpriteRects() {
-	var resources = {
-			foo: {x: 0, y: 0, w: 64, h: 64},
-		},
+	var res = [
+			LASER, {/*laser*/x:166,y:16,w:4,h:3},
+			ROBOT0, {/*robot0*/x:154,y:2,w:8,h:15},
+			ROBOT1, {/*robot1*/x:142,y:2,w:8,h:16},
+			THRUST0, {/*thrust0*/x:166,y:23,w:3,h:3},
+			THRUST1, {/*thrust1*/x:174,y:16,w:1,h:1},
+			TILE_CORNER, {/*tile_corner*/x:114,y:2,w:24,h:24},
+			TILE_WALL, {/*tile_wall*/x:2,y:2,w:24,h:24},
+			TILE_GROUND0, {/*tile_ground0*/x:86,y:2,w:24,h:24},
+			TILE_GROUND1, {/*tile_ground1*/x:58,y:2,w:24,h:24},
+			TILE_GROUND2, {/*tile_ground2*/x:30,y:2,w:24,h:24},
+			TURN, {/*turn*/x:166,y:2,w:9,h:10},
+		],
 		positions = [],
 		xf = 1 / atlas.width,
 		yf = 1 / atlas.height,
 		index = 0
 
-	for (var name in resources) {
-		var rc = resources[name],
+	for (var i = res.length; i > 0;) {
+		var rc = res[--i],
+			id = res[--i],
 			x = rc.x,
 			y = rc.y,
 			w = rc.w,
@@ -366,7 +430,7 @@ function calculateSpriteRects() {
 			r = xf * (x + w),
 			b = yf * (y + h)
 
-		sprites[name] = {
+		sprites[id] = {
 			index: index++,
 			aspect: h / w,
 			size: w}
@@ -435,11 +499,19 @@ function createTextureFrom(image) {
 	gl.texParameteri(
 		gl.TEXTURE_2D,
 		gl.TEXTURE_MIN_FILTER,
-		gl.LINEAR_MIPMAP_LINEAR)
+		gl.NEAREST)
 	gl.texParameteri(
 		gl.TEXTURE_2D,
 		gl.TEXTURE_MAG_FILTER,
-		gl.LINEAR)
+		gl.NEAREST)
+	gl.texParameteri(
+		gl.TEXTURE_2D,
+		gl.TEXTURE_WRAP_S,
+		gl.CLAMP_TO_EDGE)
+	gl.texParameteri(
+		gl.TEXTURE_2D,
+		gl.TEXTURE_WRAP_T,
+		gl.CLAMP_TO_EDGE)
 
 	gl.generateMipmap(gl.TEXTURE_2D)
 	gl.bindTexture(gl.TEXTURE_2D, null)
@@ -448,8 +520,8 @@ function createTextureFrom(image) {
 }
 
 function getContext() {
-	for (var canvas = D.getElementById('Canvas'),
-			ctx,
+	canvas = D.getElementById('Canvas')
+	for (var ctx,
 			types = ['webgl', 'experimental-webgl'],
 			l = types.length,
 			i = 0; i < l; ++i) {
@@ -467,7 +539,7 @@ function initGame() {
 
 	gl.enable(gl.BLEND)
 	gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
-	gl.clearColor(0, 0, 0, 1)
+	gl.clearColor(.7, .7, .7, 1)
 
 	initBuffers(program)
 
@@ -500,12 +572,15 @@ function startWhenReady() {
 		return
 	}
 	overlayJoinGame.style.display = 'none'
+	canvas.style.display = 'block'
+	D.body.style.overflow = 'hidden'
+	W.scrollTo(0, 0)
 	initGame()
 }
 
-function setNumberOfPlayers(n) {
+function setNumberOfPlayers(n, max) {
 	var e = D.getElementById('NumberOfPlayers')
-	e.innerText = n
+	e.innerText = n + ' of ' + max
 }
 
 function updateGame(update) {
@@ -515,7 +590,7 @@ function updateGame(update) {
 			startWhenReady()
 		}
 	} else {
-		setNumberOfPlayers(update.players.length)
+		setNumberOfPlayers(update.players.length, update.maxPlayers)
 	}
 }
 
@@ -552,7 +627,7 @@ function updateGameList(games) {
 		var li = D.createElement('li')
 		li.innerText = g.name + ', ' + g.players + ' player(s)'
 		li.onclick = function() {
-			setNumberOfPlayers(g.players)
+			setNumberOfPlayers(g.players, g.maxPlayers)
 			joinGame(g.id)
 		}
 		ul.appendChild(li)
@@ -614,8 +689,8 @@ function load() {
 	ws.onmessage = message
 	ws.onclose = disconnected
 
-	/*atlas = new Image()
-	atlas.src = 'atlas.png'*/
+	atlas = new Image()
+	atlas.src = 'atlas.png'
 }
 
 W.onload = load
