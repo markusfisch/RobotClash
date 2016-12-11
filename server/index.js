@@ -85,7 +85,7 @@ wss.on('connection', function(ws) {
 	function getGamesList(list) {
 		var now = Date.now(),
 			games = []
-		for (var i = M.min(list.length, 999); i--;) {
+		for (var i = Math.min(list.length, 999); i--;) {
 			var gameId = list[i],
 				gameFile = path.join(gamesDir, gameId.toString()),
 				game = loadGame(gameFile)

@@ -9,7 +9,7 @@
 html, body {
 	margin: 0; padding: 0;
 	background: #b3b3b3;
-	font: 16pt monospace; color: #1a1a1a;
+	font: 14pt monospace; color: #1a1a1a;
 	font-weight: lighter;
 	letter-spacing: .1em;
 	line-height: 150%;
@@ -41,6 +41,7 @@ canvas {
 
 .Headline {
 	margin: 1em;
+	line-height: 150%;
 }
 
 .List {
@@ -57,13 +58,20 @@ canvas {
 
 .Button, .Input {
 	margin: 0 0 1em; padding: .2em .6em;
-	background: #404040;
-	font: 16pt monospace; color: #b3b3b3;
+	font: 14pt monospace;
 	font-weight: lighter;
 	letter-spacing: .1em;
 	line-height: 150%;
 	text-transform: uppercase;
 	border: 0;
+}
+
+.Button {
+	background: #1a1a1a; color: #b3b3b3;
+}
+
+.Input {
+	background: #a3a3a3; color: #1a1a1a;
 }
 
 </style>
@@ -164,6 +172,9 @@ var M = Math,
 	program,
 	width,
 	height,
+	halfWidth,
+	halfHeight,
+	yMax,
 	scaleFactor,
 	tileSize,
 	halfTileSize,
@@ -209,7 +220,7 @@ function drawPlayers() {
 		var player = players[i],
 			x = mapX + player.x * tileSize,
 			y = mapY - player.y * tileSize +
-				(M.sin(now * .001) * tileSize * .05)
+				(M.sin(now * .005) * tileSize * .05)
 		drawSprite(sprites[ROBOT0], x, y)
 	}
 }
@@ -256,6 +267,21 @@ function draw() {
 }
 
 function input() {
+	var lastCol = game.width - 1,
+		lastRow = game.height - 1
+	// process only first pointer for now
+	for (var i = M.min(1, pointersLength); i--;) {
+		var x = pointersX[i],
+			y = pointersY[i],
+			col = M.round((x - mapX) / tileSize),
+			row = M.round((mapY - y) / tileSize)
+
+		if (col < 0 || col > lastCol ||
+				row < 0 || row > lastRow) {
+			continue
+		}
+console.log("clicked at " + col + ", " + row)
+	}
 }
 
 function run() {
@@ -269,6 +295,14 @@ function run() {
 	draw()
 }
 
+function pageXToGl(x) {
+	return (x - halfWidth) / halfWidth
+}
+
+function pageYToGl(y) {
+	return (halfHeight - y) / (halfHeight / yMax)
+}
+
 function setPointer(event, down) {
 	if (!down) {
 		pointersLength = event.touches ? event.touches.length : 0
@@ -279,13 +313,13 @@ function setPointer(event, down) {
 		for (var i = pointersLength; i--;) {
 			var t = touches[i]
 
-			pointersX[i] = t.pageX
-			pointersY[i] = t.pageY
+			pointersX[i] = pageXToGl(t.pageX)
+			pointersY[i] = pageYToGl(t.pageY)
 		}
 	} else {
 		pointersLength = 1
-		pointersX[0] = event.pageX
-		pointersY[0] = event.pageY
+		pointersX[0] = pageXToGl(event.pageX)
+		pointersY[0] = pageYToGl(event.pageY)
 	}
 
 	event.stopPropagation()
@@ -367,13 +401,15 @@ function resize() {
 	width = gl.canvas.clientWidth
 	height = gl.canvas.clientHeight
 
+	halfWidth = width >> 1
+	halfHeight = height >> 1
+	yMax = height/width
+
 	gl.canvas.width = width
 	gl.canvas.height = height
 	gl.viewport(0, 0, width, height)
 
-	var halfWidth = width >> 1,
-		halfHeight = height >> 1,
-		cols = game.width,
+	var cols = game.width,
 		rows = game.height,
 		ref = sprites[TILE_GROUND0].size
 
