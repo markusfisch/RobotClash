@@ -11,39 +11,18 @@ var PLAYER_COLORS = [
 		{normal: '#00ff5a', dark: '#00cc48'},
 	],
 	MAX_PLAYERS = PLAYER_COLORS.length,
-	MOVES_PER_ROUND = 2,
-	fs = require('fs'),
-	path = require('path'),
+	ACTIONS_PER_ROUND = 2,
 	WebSocketServer = require('ws').Server,
 	wss = new WebSocketServer({port: 63378}),
-	emptyArray = [],
-	gamesDir = path.join(__dirname, 'games'),
+	games = [],
+	updates = [],
+	newGameListeners = [],
 	playerSerial = 0
-
-function removeDirectory(dir) {
-	if (!fs.existsSync(dir)) {
-		return
-	}
-	fs.readdirSync(dir).forEach(function(file, index) {
-		file = path.join(dir, file)
-		if (fs.lstatSync(file).isDirectory()) {
-			removeDirectory(file)
-		} else {
-			fs.unlinkSync(file)
-		}
-	})
-	fs.rmdirSync(dir)
-}
-
-if (fs.existsSync(gamesDir)) {
-	removeDirectory(gamesDir)
-}
-fs.mkdirSync(gamesDir)
 
 wss.on('connection', function(ws) {
 	var playerId = ++playerSerial,
-		currentGameFile = null,
-		watcher = null
+		lastUpdate = 0,
+		currentGame = null
 
 	function parseJson(s) {
 		try {
@@ -55,96 +34,52 @@ wss.on('connection', function(ws) {
 
 	function sendJSON(obj) {
 		try {
-			ws.send(JSON.stringify(obj))
+			//ws.send(JSON.stringify(obj))
+			var s = JSON.stringify(obj)
+console.log("send(" + s + ")");
+			ws.send(s)
 		} catch (e) {
+console.log("error: " + e);
 			leaveGame()
 		}
-	}
-
-	function sendOk(obj) {
-		sendJSON(obj)
 	}
 
 	function sendError(message) {
 		sendJSON({error: message})
 	}
 
-	function loadGame(gameFile) {
-		gameFile = gameFile || currentGameFile
-		return fs.existsSync(gameFile) ?
-			parseJson(fs.readFileSync(gameFile)) :
-			null
-	}
-
-	function saveGame(game) {
-		if (currentGameFile) {
-			fs.writeFileSync(currentGameFile, JSON.stringify(game))
-		}
-	}
-
-	function getGamesList(list) {
-		var now = Date.now(),
-			games = []
-		for (var i = Math.min(list.length, 999); i--;) {
-			var gameId = list[i],
-				gameFile = path.join(gamesDir, gameId.toString()),
-				game = loadGame(gameFile)
-			if (!game || now - game.created > 86400000) {
-				fs.unlinkSync(gameFile)
-				continue
-			}
-			var numberOfPlayers = game.players.length
-			if (numberOfPlayers < MAX_PLAYERS && !game.started) {
-				games.push({
-					id: gameId,
+	function getGames() {
+		var list = []
+		for (var idx in games) {
+			var game = games[idx],
+				numberOfPlayers
+			if (game &&
+					!game.started &&
+					(numberOfPlayers = game.players.length) <
+						game.maxPlayers) {
+				list.push({
+					id: idx,
 					name: game.name,
 					players: numberOfPlayers,
-					maxPlayers: MAX_PLAYERS})
+					maxPlayers: game.maxPlayers})
 			}
 		}
-		return games
+		return {games: list.length > 0 ? list : 'no games available'}
 	}
 
 	function listGames() {
-		fs.readdir(gamesDir, function(err, list) {
-			var games
-			if (!err && list &&
-					(games = getGamesList(list)) &&
-					games.length > 0) {
-				sendOk({games: games})
-			} else {
-				sendOk({games: 'no games available'})
-			}
-		})
-	}
-
-	function closeWatcher() {
-		if (watcher) {
-			watcher.close()
-			watcher = null
-		}
-	}
-
-	function watchGame(gameFile) {
-		closeWatcher()
-		watcher = fs.watch(gameFile, function() {
-			if (!fs.existsSync(gameFile)) {
-				watcher.close()
-			} else {
-				sendOk({update: loadGame()})
-			}
-		})
+		newGameListeners[playerId] = updateNewGame
+		sendJSON(getGames())
 	}
 
 	function createInitialGame(name) {
 		return {
+			id: playerId,
 			created: Date.now(),
 			started: 0,
 			name: name,
 			maxPlayers: MAX_PLAYERS,
 			players: [],
-			attacks: [],
-			moves: [],
 			width: 8,
 			height: 8,
 			map: [
@@ -160,25 +95,61 @@ wss.on('connection', function(ws) {
 		}
 	}
 
+	function updateNewGame() {
+		sendJSON(getGames())
+	}
+
+	function updateNewGameListeners() {
+		for (var idx in newGameListeners) {
+			var callback = newGameListeners[idx]
+			if (callback) {
+				callback()
+			}
+		}
+	}
+
+	function removeNewGameListener() {
+		newGameListeners.splice(playerId, 1)
+	}
+
+	function updateClient() {
+		var game = currentGame
+		if (!game) {
+			return
+		}
+		var ud = updates[game.id],
+			len = ud.length
+		for (var i = lastUpdate; i < len; ++i) {
+			sendJSON(ud[i])
+		}
+		lastUpdate = len
+	}
+
+	function addUpdate(obj) {
+		var game = currentGame
+		if (game) {
+			updates[game.id].push(obj)
+			var players = game.players
+			for (var i = players.length; i--;) {
+				players[i].listener();
+			}
+		}
+	}
+
 	function addPlayerToGame(game) {
 		var players = game.players,
 			color = PLAYER_COLORS[players.length]
 		players.push({
 			id: playerId,
 			life: 1,
-			moves: MOVES_PER_ROUND,
-			color: color})
+			actions: ACTIONS_PER_ROUND,
+			color: color,
+			listener: updateClient})
 	}
 
 	function findGameByName(name) {
-		var gameIds = fs.readdirSync(gamesDir)
-		if (!gameIds || gameIds.length < 1) {
-			return null
-		}
-		for (var i = gameIds.length; i--;) {
-			var gameId = gameIds[i],
-				gameFile = path.join(gamesDir, gameId.toString()),
-				game = loadGame(gameFile)
+		for (var idx in games) {
+			var game = games[idx]
 			if (game && game.name === name) {
 				return game
 			}
@@ -191,22 +162,21 @@ wss.on('connection', function(ws) {
 			sendError('missing name')
 			return
 		}
-		var gameFile = path.join(gamesDir, playerId.toString())
-		if (fs.existsSync(gameFile)) {
+		if (games[playerId]) {
 			sendError('you already created a game')
 			return
 		}
 		var name = json.name.trim().toLowerCase().substring(0, 16)
-		if (findGameByName(json.name)) {
+		if (findGameByName(name)) {
 			sendError('there is already a game of that name')
 			return
 		}
-		currentGameFile = gameFile
-		var game = createInitialGame(json.name)
-		addPlayerToGame(game)
-		saveGame(game)
-		watchGame(gameFile)
-		sendOk({created: playerId})
+		currentGame = createInitialGame(name)
+		addPlayerToGame(currentGame)
+		games[playerId] = currentGame
+		updates[playerId] = []
+		sendJSON({created: playerId})
+		updateNewGameListeners()
 	}
 
 	function getPlayerFromGame(game) {
@@ -225,9 +195,9 @@ wss.on('connection', function(ws) {
 			sendError('missing gameId')
 			return
 		}
-		var gameFile = path.join(gamesDir, json.gameId.toString()),
-			game = loadGame(gameFile)
-		if (!game) {
+		var idx = parseInt(json.gameId),
+			game
+		if (idx < 1 || !(game = games[idx])) {
 			sendError('game does not exist')
 			return
 		}
@@ -243,11 +213,12 @@ wss.on('connection', function(ws) {
 			sendError('you are already in this game')
 			return
 		}
-		currentGameFile = gameFile
+		currentGame = game
 		addPlayerToGame(game)
-		saveGame(game)
-		watchGame(gameFile)
-		sendOk({joined: playerId})
+		sendJSON({joined: playerId})
+		addUpdate({
+			players: game.players.length,
+			maxPlayers: game.players.length})
 	}
 
 	function removePlayerFromGame(game, id) {
@@ -263,21 +234,17 @@ wss.on('connection', function(ws) {
 	}
 
 	function leaveGame() {
-		if (currentGameFile) {
-			var game = loadGame()
-			if (!game) {
-				sendError('there is no game to leave')
-				return
-			}
-			removePlayerFromGame(game, playerId)
-			if (game.players.length < 1) {
-				fs.unlinkSync(currentGameFile)
+		if (currentGame) {
+			removePlayerFromGame(currentGame, playerId)
+			if (currentGame.players.length < 1) {
+				var idx = currentGame.id
+				games.splice(idx, 1)
+				updates.splice(idx, 1)
 			} else {
-				saveGame(game)
+				addUpdate({remove: playerId})
 			}
 		}
-		currentGameFile = null
-		closeWatcher()
+		currentGame = null
 	}
 
 	function getOffset(game, x, y) {
@@ -317,15 +284,15 @@ wss.on('connection', function(ws) {
 	}
 
 	function nextMoveOrPlayer(game, player) {
-		if (--player.moves < 1) {
+		if (--player.actions < 1) {
 			var next = findNextPlayer(game)
-			next.moves = MOVES_PER_ROUND
+			next.actions = ACTIONS_PER_ROUND
 			game.turn = next.id
 		}
 	}
 
 	function startGame() {
-		var game = loadGame()
+		var game = currentGame
 		if (!game || !getPlayerFromGame(game)) {
 			sendError('you are not part of a game yet')
 			return
@@ -350,34 +317,10 @@ wss.on('connection', function(ws) {
 			player.x = x
 			player.y = y
 		}
+		removeNewGameListener()
 		game.started = Date.now()
 		game.turn = players[0].id
-		saveGame(game)
-	}
-
-	function loadGameAndPlayer() {
-		var game = loadGame(),
-			player
-		if (!game || !(player = getPlayerFromGame(game))) {
-			sendError('you are not a part of this game yet')
-			return null
-		} else if (game.turn !== playerId) {
-			sendError('it is not your turn')
-			return null
-		}
-		return {game: game, player: player}
-	}
-
-	function getCheckedGame(game) {
-		var player
-		if (!game || !(player = getPlayerFromGame(game))) {
-			sendError('you are not a part of this game yet')
-			return null
-		} else if (game.turn !== playerId) {
-			sendError('it is not your turn')
-			return null
-		}
-		return player
+		addUpdate({game: game})
 	}
 
 	function playerAttack(json) {
@@ -385,31 +328,33 @@ wss.on('connection', function(ws) {
 			sendError('missing attack target')
 			return
 		}
-		var game = loadGame(),
-			player = getCheckedGame(game)
-		if (!player) {
+		var game = currentGame,
+			player
+		if (!game || !(player = getPlayerFromGame(game))) {
 			sendError('player not in game')
 			return
 		}
 		var target = json.target,
 			x = target.x,
 			y = target.y,
+			players = game.players,
 			victim = getPlayerByPosition(players, x, y)
 		if (!victim) {
 			sendError('no target at given position')
 			return
 		}
-		var ground = getCell(game, victim.x, victim.y)
+		var ground = getCell(game, victim.x, victim.y),
+			attack = {
+				from: player.id,
+				to: victim.id,
+				damage: 0,
+			}
 		if (Math.random() > .5 / (ground + 1)) {
 			var dx = victim.x - player.x,
 				dy = victim.y - player.y,
-				d = Math.sqrt(dx*dx + dy*dy),
-				damage = 1 / d
-			victim.life -= damage
-			game.attacks.push({
-				from: player.id,
-				to: victim.id,
-				damage: damage})
+				d = Math.sqrt(dx*dx + dy*dy)
+			attack.damage = 1 / d
+			victim.life -= attack.damage
 		}
 		if (victim.life <= 0) {
 			removePlayerFromGame(game, victim.id)
@@ -418,7 +363,7 @@ wss.on('connection', function(ws) {
 			}
 		}
 		nextMoveOrPlayer(game, player)
-		saveGame(game)
+		addUpdate({attack: attack})
 	}
 
 	function playerMove(json) {
@@ -426,14 +371,15 @@ wss.on('connection', function(ws) {
 			sendError('missing a direction')
 			return
 		}
-		var game = loadGame(),
-			player = getCheckedGame(game)
-		if (!player) {
+		var game = currentGame,
+			player
+		if (!game || !(player = getPlayerFromGame(game))) {
 			sendError('player not in game')
 			return
 		}
 		var width = game.width,
 			height = game.height,
+			players = game.players,
 			target = json.target,
 			x = target.x,
 			y = target.y
@@ -443,16 +389,16 @@ wss.on('connection', function(ws) {
 			sendError('illegal move')
 			return
 		}
-		game.moves.push({
+		var move = {
 			playerId: player.id,
 			fromX: player.x,
 			fromY: player.y,
 			toX: x,
-			toY: y})
+			toY: y}
 		player.x = x
 		player.y = y
 		nextMoveOrPlayer(game, player)
-		saveGame(game)
+		addUpdate({move: move})
 	}
 
 	ws.on('message', function(message) {
@@ -485,7 +431,8 @@ wss.on('connection', function(ws) {
 		}
 	})
 
-	ws.on('close', function(message) {
+	ws.on('close', function() {
+		removeNewGameListener()
 		leaveGame()
 	})
 })

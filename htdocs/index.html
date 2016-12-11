@@ -27,21 +27,18 @@ canvas {
 	position: fixed;
 	width: 100%;
 	height: 100%;
-	text-align: center;
 	z-index: 9;
+	text-align: center;
 }
 
-#JoinGameOverlay {
-	display: none
-}
-
-#CreateGameForm {
+.Form {
 	margin: 0 1em;
 }
 
 .Headline {
 	margin: 1em;
 	line-height: 150%;
+	font-size: 12pt;
 }
 
 .List {
@@ -68,10 +65,15 @@ canvas {
 
 .Button {
 	background: #1a1a1a; color: #b3b3b3;
+	cursor: pointer;
 }
 
 .Input {
 	background: #a3a3a3; color: #1a1a1a;
+}
+
+#JoinGameOverlay {
+	display: none;
 }
 
 </style>
@@ -80,7 +82,7 @@ canvas {
 <canvas id="Canvas">Sorry, this browser cannot render this content.</canvas>
 <div id="GameListOverlay" class="Overlay">
 	<h2 class="Headline">Create or join a game</h2>
-	<form id="CreateGameForm" onsubmit="return false">
+	<form class="Form" onsubmit="return false">
 	<input type="text" id="GameName" class="Input"
 		minlength="1" maxlength="16"/>
 	<button id="CreateGame" class="Button"
@@ -614,22 +616,6 @@ function startWhenReady() {
 	initGame()
 }
 
-function setNumberOfPlayers(n, max) {
-	var e = D.getElementById('NumberOfPlayers')
-	e.innerText = n + ' of ' + max
-}
-
-function updateGame(update) {
-	if (update.started) {
-		game = update
-		if (!last) {
-			startWhenReady()
-		}
-	} else {
-		setNumberOfPlayers(update.players.length, update.maxPlayers)
-	}
-}
-
 function send(obj) {
 	ws.send(JSON.stringify(obj))
 }
@@ -648,6 +634,44 @@ function createGame() {
 	if (name) {
 		send({cmd: 'create', name: name})
 	}
+}
+
+function movePlayer(move) {
+}
+
+function attackPlayer(attack) {
+}
+
+function removePlayer(playerId) {
+	var players,
+		len
+	if (!game ||
+			!(players = game.players) ||
+			(len = players.length) < 1) {
+		return
+	}
+	for (var i = players.length; i--;) {
+		var player = players[i]
+		if (player.id === playerId) {
+			players.splice(i, 1)
+			return
+		}
+	}
+}
+
+function setGameAndStart(g) {
+	game = g
+	startWhenReady()
+}
+
+function setNumberOfPlayers(n, max) {
+	var e = D.getElementById('NumberOfPlayers')
+	e.innerText = n + ' of ' + max
+}
+
+function waitForOthersToJoin() {
+	overlayGameList.style.display = 'none'
+	overlayJoinGame.style.display = 'block'
 }
 
 function updateGameList(games) {
@@ -678,21 +702,27 @@ function parseJson(s) {
 	}
 }
 
-function waitForOthersToJoin() {
-	overlayGameList.style.display = 'none'
-	overlayJoinGame.style.display = 'block'
-}
-
 function message(event) {
+console.log(event.data)
 	var json = parseJson(event.data)
 	if (json.error) {
 		alert(json.error)
+	} else if (json.remove) {
+		removePlayer(json.remove)
+	} else if (json.attack) {
+		attackPlayer(json.attack)
+	} else if (json.move) {
+		movePlayer(json.move)
+	} else if (last) {
+		return
 	} else if (json.games) {
 		updateGameList(json.games)
 	} else if (json.created || json.joined) {
 		waitForOthersToJoin()
-	} else if (json.update) {
-		updateGame(json.update)
+	} else if (json.players) {
+		setNumberOfPlayers(json.players, json.maxPlayers)
+	} else if (json.game) {
+		setGameAndStart(json.game)
 	}
 }
 
