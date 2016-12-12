@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width"/>
-<title>ld37</title>
+<title>Robot Clash</title>
 <style>
 
 html, body {
@@ -162,14 +162,14 @@ var M = Math,
 	ARROW = 16,
 	MARK = 17,
 	playerSprites = [
+		ROBOT_LIME,
+		ROBOT_RED,
+		ROBOT_YELLOW,
+		ROBOT_PINK,
+		ROBOT_VIOLET,
 		ROBOT_BLUE,
 		ROBOT_CYAN,
 		ROBOT_GREEN,
-		ROBOT_LIME,
-		ROBOT_PINK,
-		ROBOT_RED,
-		ROBOT_VIOLET,
-		ROBOT_YELLOW,
 	],
 	ws,
 	atlas,
@@ -816,7 +816,6 @@ function parseJson(s) {
 }
 
 function message(event) {
-console.log(event.data)
 	var json = parseJson(event.data)
 	if (json.error) {
 		alert(json.error)

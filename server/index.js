@@ -34,12 +34,8 @@ wss.on('connection', function(ws) {
 
 	function sendJSON(obj) {
 		try {
-			//ws.send(JSON.stringify(obj))
-			var s = JSON.stringify(obj)
-console.log("send(" + s + ")");
-			ws.send(s)
+			ws.send(JSON.stringify(obj))
 		} catch (e) {
-console.log("error: " + e);
 			leaveGame()
 		}
 	}
