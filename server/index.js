@@ -218,7 +218,7 @@ console.log("error: " + e);
 		sendJSON({joined: playerId})
 		addUpdate({
 			players: game.players.length,
-			maxPlayers: game.players.length})
+			maxPlayers: game.maxPlayers})
 	}
 
 	function removePlayerFromGame(game, id) {
@@ -259,14 +259,14 @@ console.log("error: " + e);
 		for (var i = players.length; i--;) {
 			var player = players[i]
 			if (player.x === x && player.y === y) {
-				return player.id
+				return player
 			}
 		}
-		return 0
+		return null
 	}
 
 	function findNextPlayer(game) {
-		var players = game.players
+		var players = game.players,
 			len = players.length
 		if (len < 1) {
 			return -1
@@ -288,6 +288,7 @@ console.log("error: " + e);
 			var next = findNextPlayer(game)
 			next.actions = ACTIONS_PER_ROUND
 			game.turn = next.id
+			addUpdate({turn: next.id})
 		}
 	}
 
@@ -312,7 +313,7 @@ console.log("error: " + e);
 			do {
 				x = width * Math.random() | 0
 				y = height * Math.random() | 0
-			} while (getPlayerByPosition(players, x, y) > 0)
+			} while (getPlayerByPosition(players, x, y))
 
 			player.x = x
 			player.y = y
@@ -320,12 +321,15 @@ console.log("error: " + e);
 		removeNewGameListener()
 		game.started = Date.now()
 		game.turn = players[0].id
+		updateNewGameListeners()
 		addUpdate({game: game})
 	}
 
 	function playerAttack(json) {
-		if (!json || !json.target) {
-			sendError('missing attack target')
+		if (!json ||
+				typeof json.x === 'undefined' ||
+				typeof json.y === 'undefined') {
+			sendError('missing attack coordinates')
 			return
 		}
 		var game = currentGame,
@@ -334,19 +338,17 @@ console.log("error: " + e);
 			sendError('player not in game')
 			return
 		}
-		var target = json.target,
-			x = target.x,
-			y = target.y,
+		var x = parseInt(json.x),
+			y = parseInt(json.y),
 			players = game.players,
 			victim = getPlayerByPosition(players, x, y)
 		if (!victim) {
-			sendError('no target at given position')
 			return
 		}
 		var ground = getCell(game, victim.x, victim.y),
 			attack = {
-				from: player.id,
-				to: victim.id,
+				attacker: player.id,
+				victim: victim.id,
 				damage: 0,
 			}
 		if (Math.random() > .5 / (ground + 1)) {
@@ -357,18 +359,18 @@ console.log("error: " + e);
 			victim.life -= attack.damage
 		}
 		if (victim.life <= 0) {
+			addUpdate({remove: victim.id})
 			removePlayerFromGame(game, victim.id)
-			if (game.players.length < 2) {
-				game.winner = player.id
-			}
 		}
 		nextMoveOrPlayer(game, player)
 		addUpdate({attack: attack})
 	}
 
 	function playerMove(json) {
-		if (!json || !json.target) {
-			sendError('missing a direction')
+		if (!json ||
+				typeof json.x === 'undefined' ||
+				typeof json.y === 'undefined') {
+			sendError('missing a destination')
 			return
 		}
 		var game = currentGame,
@@ -380,21 +382,20 @@ console.log("error: " + e);
 		var width = game.width,
 			height = game.height,
 			players = game.players,
-			target = json.target,
-			x = target.x,
-			y = target.y
-		if (x < 1 || x >= width - 1 ||
-				y < 1 || y >= height - 1 ||
-				getPlayerByPosition(players, x, y)) {
-			sendError('illegal move')
+			x = parseInt(json.x),
+			y = parseInt(json.y)
+		if (x < 0 || x >= width - 1 ||
+				y < 0 || y >= height - 1) {
+			sendError('out of bounds')
+			return
+		} else if (getPlayerByPosition(players, x, y)) {
+			sendError('position already occupied')
 			return
 		}
 		var move = {
-			playerId: player.id,
-			fromX: player.x,
-			fromY: player.y,
-			toX: x,
-			toY: y}
+			id: player.id,
+			x: x,
+			y: y}
 		player.x = x
 		player.y = y
 		nextMoveOrPlayer(game, player)
