@@ -148,7 +148,7 @@ var M = Math,
 	TILE_GROUND2 = 2,
 	TILE_CORNER = 3,
 	TILE_WALL = 4,
-	LASER = 5,
+	FIRE = 5,
 	ROBOT0 = 6,
 	ROBOT1 = 7,
 	THRUST0 = 8,
@@ -197,6 +197,7 @@ var M = Math,
 	fireFromY,
 	fireToX,
 	fireToY,
+	fireDuration,
 	fireUntil
 
 function drawSprite(sprite, x, y) {
@@ -225,32 +226,12 @@ function drawSprite(sprite, x, y) {
 }
 
 function drawFire() {
-	var laser = sprites[LASER],
-		wobble = tileSize * .2,
-		x = fireFromX,
-		y = fireFromY
-
-	do {
-		var dx = fireToX - x,
-			dy = fireToY - y,
-			f = .3 + M.random() * .7,
-			nx = x + dx * f + M.random() * wobble,
-			ny = y + dy * f + M.random() * wobble,
-			mx = x + (nx - x) * .5,
-			my = y + (ny - y) * .5,
-			a = M.atan2(ny, nx),
-			cos = M.cos(a),
-			sin = M.sin(a)
-		laser.w = M.sqrt(mx*mx + my*my)
-		transformation[0] = cos
-		transformation[1] = -sin
-		transformation[3] = sin
-		transformation[4] = cos
-		drawSprite(laser, mx, my)
-		x = nx
-		y = ny
-	} while(M.abs(x - fireToX) > tileSize &&
-		M.abs(y - fireToY) > tileSize)
+	var t = 1 - ((fireUntil - now) / fireDuration),
+		dx = fireToX - fireFromX,
+		dy = fireToY - fireFromY,
+		x = fireFromX + dx * t,
+		y = fireFromY + dy * t
+	drawSprite(sprites[FIRE], x, y)
 }
 
 function drawPlayers() {
@@ -527,11 +508,11 @@ function resize() {
 
 function calculateSpriteRects() {
 	var res = [
-			LASER, {/*laser*/x:192,y:16,w:4,h:3},
+			FIRE, {/*fire*/x:192,y:16,w:6,h:6},
 			ROBOT0, {/*robot0*/x:180,y:2,w:8,h:15},
 			ROBOT1, {/*robot1*/x:168,y:2,w:8,h:16},
-			THRUST0, {/*thrust0*/x:192,y:23,w:3,h:3},
-			THRUST1, {/*thrust1*/x:200,y:16,w:1,h:1},
+			THRUST0, {/*thrust0*/x:180,y:21,w:3,h:3},
+			THRUST1, {/*thrust1*/x:187,y:21,w:1,h:1},
 			TILE_CORNER, {/*tile_corner*/x:114,y:2,w:24,h:24},
 			TILE_WALL, {/*tile_wall*/x:2,y:2,w:24,h:24},
 			TILE_GROUND0, {/*tile_ground0*/x:86,y:2,w:24,h:24},
@@ -734,8 +715,8 @@ function movePlayer(move) {
 	if (!player) {
 		return
 	}
-	player.tx = move.x
-	player.ty = move.y
+	player.x = move.x
+	player.y = move.y
 }
 
 function attackPlayer(attack) {
@@ -748,7 +729,8 @@ function attackPlayer(attack) {
 	fireFromY = mapY - attacker.y * tileSize
 	fireToX = mapX + victim.x * tileSize
 	fireToY = mapY - victim.y * tileSize
-	fireUntil = Date.now() + 200
+	fireDuration = 200
+	fireUntil = Date.now() + fireDuration
 }
 
 function removePlayer(playerId) {
