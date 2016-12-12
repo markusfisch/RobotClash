@@ -192,7 +192,12 @@ var M = Math,
 	keysDown = [],
 	messagePending = false,
 	myId,
-	game
+	game,
+	fireFromX,
+	fireFromY,
+	fireToX,
+	fireToY,
+	fireUntil
 
 function drawSprite(sprite, x, y) {
 	gl.bindBuffer(gl.ARRAY_BUFFER, texturePositionBuffer)
@@ -217,6 +222,35 @@ function drawSprite(sprite, x, y) {
 		transformation)
 
 	gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+}
+
+function drawFire() {
+	var laser = sprites[LASER],
+		wobble = tileSize * .2,
+		x = fireFromX,
+		y = fireFromY
+
+	do {
+		var dx = fireToX - x,
+			dy = fireToY - y,
+			f = .3 + M.random() * .7,
+			nx = x + dx * f + M.random() * wobble,
+			ny = y + dy * f + M.random() * wobble,
+			mx = x + (nx - x) * .5,
+			my = y + (ny - y) * .5,
+			a = M.atan2(ny, nx),
+			cos = M.cos(a),
+			sin = M.sin(a)
+		laser.w = M.sqrt(mx*mx + my*my)
+		transformation[0] = cos
+		transformation[1] = -sin
+		transformation[3] = sin
+		transformation[4] = cos
+		drawSprite(laser, mx, my)
+		x = nx
+		y = ny
+	} while(M.abs(x - fireToX) > tileSize &&
+		M.abs(y - fireToY) > tileSize)
 }
 
 function drawPlayers() {
@@ -278,6 +312,9 @@ function draw() {
 	initFrame()
 	drawMap()
 	drawPlayers()
+	if (fireUntil > now) {
+		drawFire()
+	}
 }
 
 function getPlayerById(playerId) {
@@ -697,17 +734,21 @@ function movePlayer(move) {
 	if (!player) {
 		return
 	}
-	player.x = move.x
-	player.y = move.y
+	player.tx = move.x
+	player.ty = move.y
 }
 
 function attackPlayer(attack) {
 	var attacker = getPlayerById(attack.attacker),
-		vicitim = getPlayerById(attack.victim)
-	if (!attacker || !vicitim) {
+		victim = getPlayerById(attack.victim)
+	if (!attacker || !victim) {
 		return
 	}
-
+	fireFromX = mapX + attacker.x * tileSize
+	fireFromY = mapY - attacker.y * tileSize
+	fireToX = mapX + victim.x * tileSize
+	fireToY = mapY - victim.y * tileSize
+	fireUntil = Date.now() + 200
 }
 
 function removePlayer(playerId) {
