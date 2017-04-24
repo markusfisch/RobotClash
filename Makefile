@@ -16,12 +16,13 @@ live: $(ATLAS)
 $(ATLAS): $(SPRITES)
 	cd $(HTDOCS) && \
 		MAX_SIZE=256 \
-		MIN_SIZE=256 \
+			MIN_SIZE=256 \
 			MARGIN=2 \
 			EXPAND='tile_*' \
 			mkatlas ../$(SPRITES) | \
 		patchatlas index.html
-	convert $(ATLAS) \( +clone -alpha Extract \) \
-		-channel RGB \
-		-compose Multiply \
+	convert $(ATLAS) \
+		-background black \
+		-alpha Remove $(ATLAS) \
+		-compose Copy_Opacity \
 		-composite $(ATLAS)
