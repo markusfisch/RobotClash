@@ -868,7 +868,7 @@ function load() {
 	overlayGameList = D.getElementById('GameListOverlay')
 	overlayJoinGame = D.getElementById('JoinGameOverlay')
 
-	ws = new WebSocket('ws://menkent.uberspace.de:63378/')
+	ws = new WebSocket('ws://francisco.uberspace.de:41601/')
 	ws.onopen = connected
 	ws.onmessage = message
 	ws.onclose = disconnected
